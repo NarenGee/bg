@@ -90,7 +90,6 @@ function allCheckersHome(state: GameState, player: 0 | 1): boolean {
 }
 
 function isBlocked(state: GameState, point: number, player: 0 | 1): boolean {
-  const opponent = 1 - player as 0 | 1;
   const count = state.points[point];
   if (player === 0) return count <= -2;
   return count >= 2;

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ChatMessage } from '../lib/gemini';
-import { initGemini, isGeminiReady } from '../lib/gemini';
+import { initGemini } from '../lib/gemini';
 
 interface CoachStore {
   apiKey: string;

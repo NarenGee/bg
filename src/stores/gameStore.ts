@@ -1,7 +1,7 @@
 import { create } from 'zustand';
+import type { Move } from '../lib/backgammon';
 import {
-  GameState,
-  Move,
+  type GameState,
   createInitialState,
   rollDice,
   expandDice,
@@ -60,8 +60,9 @@ export const useGameStore = create<GameStore>((set) => ({
 
     // Check if this is a legal destination for selected piece
     if (state.selectedPoint !== null) {
+      const sel = state.selectedPoint;
       const destMove = state.legalMoves.find(
-        (m) => m.from === (state.selectedPoint === -1 ? 'bar' : state.selectedPoint) && m.to === point
+        (m) => m.from === (sel === -1 ? 'bar' : sel) && m.to === point
       );
       if (destMove) {
         const newState = applyMove(state, destMove);
@@ -73,7 +74,7 @@ export const useGameStore = create<GameStore>((set) => ({
     const player = state.currentPlayer;
     const hasCheckers = point === -1
       ? state.bar[player] > 0
-      : (player === 0 ? state.points[point] > 0 : state.points[point] < 0);
+      : point !== null && (player === 0 ? state.points[point] > 0 : state.points[point] < 0);
 
     if (!hasCheckers) return state;
 

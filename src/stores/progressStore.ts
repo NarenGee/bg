@@ -20,7 +20,7 @@ interface ProgressStore {
 
 export const useProgressStore = create<ProgressStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       level: 'beginner',
       completedLessons: [],
       quizScores: {},
@@ -60,9 +60,8 @@ export const useProgressStore = create<ProgressStore>()(
 
       setLevel: (level) => set({ level }),
 
-      getCompletionPercent: (difficulty) => {
-        // Calculated outside set using get()
-        return 0; // will be computed in component
+      getCompletionPercent: (_difficulty) => {
+        return 0; // computed in component
       },
     }),
     {
