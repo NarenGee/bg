@@ -1,93 +1,97 @@
+import { useState, useRef, useCallback } from 'react';
 import type { Move } from '../../lib/backgammon';
 import { useGameStore } from '../../stores/gameStore';
 
-// SVG board dimensions
-const W = 920;
-const H = 580;
-const PAD = 20;
-const BAR_W = 56;
-const BEAROFF_W = 52;
+// ── Board geometry ──────────────────────────────────────────────
+const VW = 960;
+const VH = 540;
+const FRAME = 22;          // outer wooden frame thickness
+const SPINE = 18;          // horizontal divider height
+const BAR_W = 52;
+const BEAROFF_W = 48;
 
-// Inner board area (excluding outer frame)
-const INNER_X = PAD;
-const INNER_Y = PAD;
-const INNER_W = W - PAD * 2 - BEAROFF_W;
-const INNER_H = H - PAD * 2;
+const BX = FRAME;                        // board inner left
+const BY = FRAME;                        // board inner top
+const BW = VW - FRAME * 2 - BEAROFF_W;  // board inner width (excl. bearoff)
+const BH = VH - FRAME * 2;              // board inner height
 
-// Each half-board (left/right of bar)
-const HALF_W = (INNER_W - BAR_W) / 2;
-const PT_W = HALF_W / 6; // width per point
-const PT_H = (INNER_H / 2) - 10; // triangle height
+const MID_Y = BY + BH / 2;              // spine top
 
-const BAR_X = INNER_X + HALF_W;
+const HALF_W = (BW - BAR_W) / 2;
+const PT_W = HALF_W / 6;
+const PT_H = (BH - SPINE) / 2 - 4;     // triangle height
+
+const BAR_X = BX + HALF_W;
 const RIGHT_X = BAR_X + BAR_W;
 
-// Bearoff tray
-const BEAROFF_X = W - BEAROFF_W - PAD + 8;
+const BEAROFF_X = VW - FRAME - BEAROFF_W + 4;
+const CR = 19; // checker radius
 
-function pointX(pointIndex: number): number {
-  // pointIndex: 0-23 (0=visual bottom-right = game point 1)
-  // Bottom row: indices 0-11 (points 1-12), right to left
-  // Top row: indices 12-23 (points 13-24), left to right
-  if (pointIndex < 6) {
-    // Points 1-6: right half bottom, right to left
-    return RIGHT_X + (5 - pointIndex) * PT_W + PT_W / 2;
-  } else if (pointIndex < 12) {
-    // Points 7-12: left half bottom, right to left
-    return INNER_X + (11 - pointIndex) * PT_W + PT_W / 2;
-  } else if (pointIndex < 18) {
-    // Points 13-18: left half top, left to right
-    return INNER_X + (pointIndex - 12) * PT_W + PT_W / 2;
-  } else {
-    // Points 19-24: right half top, left to right
-    return RIGHT_X + (pointIndex - 18) * PT_W + PT_W / 2;
-  }
+// Point x-center (0-indexed: 0=point1 bottom-right … 23=point24 top-right)
+function ptX(i: number): number {
+  if (i < 6)  return RIGHT_X + (5 - i) * PT_W + PT_W / 2;
+  if (i < 12) return BX + (11 - i) * PT_W + PT_W / 2;
+  if (i < 18) return BX + (i - 12) * PT_W + PT_W / 2;
+  return RIGHT_X + (i - 18) * PT_W + PT_W / 2;
 }
 
-function isTopRow(pointIndex: number): boolean {
-  return pointIndex >= 12;
+function isTop(i: number) { return i >= 12; }
+
+function checkerY(i: number, stack: number, total: number): number {
+  const spacing = Math.min(CR * 2 + 2, (PT_H - CR) / Math.max(total - 1, 1));
+  if (isTop(i)) return BY + CR + 2 + stack * spacing;
+  return BY + BH - CR - 2 - stack * spacing;
 }
 
-function checkerY(pointIndex: number, stackPos: number, total: number): number {
-  const top = isTopRow(pointIndex);
-  const maxSpacing = Math.min(42, (PT_H - 28) / Math.max(total - 1, 1));
-  const spacing = Math.min(42, maxSpacing);
+// Convert SVG coords → point index (or 'bar' / 'bearoff')
+function svgPtToIndex(x: number, y: number): number | 'bar' | 'bearoff' | null {
+  if (x > BEAROFF_X) return 'bearoff';
+  if (x >= BAR_X && x <= BAR_X + BAR_W) return 'bar';
+  const top = y < MID_Y;
+  const inLeft = x >= BX && x < BAR_X;
+  const inRight = x >= RIGHT_X;
+  if (!inLeft && !inRight) return null;
   if (top) {
-    return INNER_Y + 22 + stackPos * spacing;
+    if (inLeft) {
+      const col = Math.floor((x - BX) / PT_W);
+      return 12 + col;
+    } else {
+      const col = Math.floor((x - RIGHT_X) / PT_W);
+      return 18 + col;
+    }
   } else {
-    return INNER_Y + INNER_H - 22 - stackPos * spacing;
+    if (inLeft) {
+      const col = Math.floor((x - BX) / PT_W);
+      return 11 - col;
+    } else {
+      const col = Math.floor((x - RIGHT_X) / PT_W);
+      return 5 - col;
+    }
   }
 }
 
-function DiceSVG({ value, used, x, y, dark }: { value: number; used: boolean; x: number; y: number; dark: boolean }) {
-  const s = 36;
-  const r = 5;
-  const bg = dark ? '#2C1A0E' : '#F5DEB3';
-  const fg = dark ? '#F5DEB3' : '#2C1A0E';
-  const opacity = used ? 0.35 : 1;
-
-  const pipPositions: Record<number, [number, number][]> = {
-    1: [[0.5, 0.5]],
-    2: [[0.25, 0.25], [0.75, 0.75]],
-    3: [[0.25, 0.25], [0.5, 0.5], [0.75, 0.75]],
-    4: [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]],
-    5: [[0.25, 0.25], [0.75, 0.25], [0.5, 0.5], [0.25, 0.75], [0.75, 0.75]],
-    6: [[0.25, 0.2], [0.75, 0.2], [0.25, 0.5], [0.75, 0.5], [0.25, 0.8], [0.75, 0.8]],
+// ── Pip SVG ─────────────────────────────────────────────────────
+function DiePips({ val, x, y, s }: { val: number; x: number; y: number; s: number }) {
+  const pad = s * 0.22;
+  const half = s / 2;
+  const pos: Record<number, [number, number][]> = {
+    1: [[half, half]],
+    2: [[pad, pad], [s - pad, s - pad]],
+    3: [[pad, pad], [half, half], [s - pad, s - pad]],
+    4: [[pad, pad], [s - pad, pad], [pad, s - pad], [s - pad, s - pad]],
+    5: [[pad, pad], [s - pad, pad], [half, half], [pad, s - pad], [s - pad, s - pad]],
+    6: [[pad, s * 0.2], [s - pad, s * 0.2], [pad, half], [s - pad, half], [pad, s * 0.8], [s - pad, s * 0.8]],
   };
-
-  const pips = pipPositions[value] || [];
-
   return (
-    <g opacity={opacity}>
-      <rect x={x} y={y} width={s} height={s} rx={r} ry={r}
-        fill={bg} stroke={dark ? '#5C4033' : '#8B4513'} strokeWidth={1.5} />
-      {pips.map(([px, py], i) => (
-        <circle key={i} cx={x + px * s} cy={y + py * s} r={3.5} fill={fg} />
+    <>
+      {(pos[val] || []).map(([px, py], i) => (
+        <circle key={i} cx={x + px} cy={y + py} r={s * 0.075} fill="#1A0A04" />
       ))}
-    </g>
+    </>
   );
 }
 
+// ── Main component ───────────────────────────────────────────────
 interface Props {
   overridePoints?: number[];
   overrideBar?: [number, number];
@@ -96,8 +100,8 @@ interface Props {
   overrideLegalMoves?: Move[];
   interactive?: boolean;
   highlightPoints?: number[];
-  showPipCount?: boolean; // reserved for future use
   compact?: boolean;
+  showPipCount?: boolean;
 }
 
 export default function BackgammonBoard({
@@ -108,202 +112,285 @@ export default function BackgammonBoard({
   overrideLegalMoves,
   interactive = true,
   highlightPoints = [],
-  showPipCount: _showPipCount = false,
   compact = false,
+  showPipCount: _sp = false,
 }: Props) {
   const store = useGameStore();
 
-  const points = overridePoints ?? store.points;
-  const bar = overrideBar ?? store.bar;
-  const currentPlayer = overrideCurrentPlayer ?? store.currentPlayer;
-  const dice = overrideDice ?? store.dice;
-  const legalMoves = overrideLegalMoves ?? store.legalMoves;
-  const phase = store.phase;
-  const selectedPoint = store.selectedPoint;
+  const points  = overridePoints        ?? store.points;
+  const bar     = overrideBar           ?? store.bar;
+  const player  = overrideCurrentPlayer ?? store.currentPlayer;
+  const dice    = overrideDice          ?? store.dice;
+  const legal   = overrideLegalMoves    ?? store.legalMoves;
+  const phase   = store.phase;
+  const sel     = store.selectedPoint;
   const movesLeft = store.movesLeft;
+  const isActive = interactive && !overridePoints;
 
-  const isInteractive = interactive && !overridePoints;
+  // ── Drag state ─────────────────────────────────────────────────
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<{
+    from: number | 'bar';
+    owner: 0 | 1;
+    svgX: number;
+    svgY: number;
+  } | null>(null);
 
-  function handlePointClick(idx: number) {
-    if (!isInteractive) return;
-    if (phase !== 'moving') return;
+  const clientToSvg = useCallback((cx: number, cy: number) => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const rect = svg.getBoundingClientRect();
+    const scaleX = VW / rect.width;
+    const scaleY = VH / rect.height;
+    return { x: (cx - rect.left) * scaleX, y: (cy - rect.top) * scaleY };
+  }, []);
 
-    if (selectedPoint !== null) {
-      const move = legalMoves.find(
-        m => m.from === (selectedPoint === -1 ? 'bar' : selectedPoint) && m.to === idx
-      );
-      if (move) { store.makeMove(move); return; }
-      const bearoffMove = legalMoves.find(
-        m => m.from === (selectedPoint === -1 ? 'bar' : selectedPoint) && m.to === 'bearoff'
-      );
-      if (bearoffMove && idx === -99) { store.makeMove(bearoffMove); return; }
-    }
-    store.selectPoint(idx);
+  function onPointerDown(e: React.PointerEvent<SVGElement>, fromIdx: number | 'bar') {
+    if (!isActive || phase !== 'moving') return;
+    const hasLegal = legal.some(m => m.from === fromIdx);
+    if (!hasLegal) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    store.selectPoint(fromIdx === 'bar' ? -1 : fromIdx as number);
+    const { x, y } = clientToSvg(e.clientX, e.clientY);
+    setDrag({ from: fromIdx, owner: player, svgX: x, svgY: y });
   }
 
-  function handleBarClick() {
-    if (!isInteractive || phase !== 'moving') return;
-    store.selectPoint(-1);
+  function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (!drag) return;
+    const { x, y } = clientToSvg(e.clientX, e.clientY);
+    setDrag(d => d ? { ...d, svgX: x, svgY: y } : null);
+  }
+
+  function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
+    if (!drag) return;
+    const { x, y } = clientToSvg(e.clientX, e.clientY);
+    const dest = svgPtToIndex(x, y);
+    if (dest !== null && dest !== 'bar') {
+      const move = legal.find(m => m.from === drag.from && m.to === dest);
+      if (move) { store.makeMove(move); }
+    }
+    setDrag(null);
+    if (!drag) store.selectPoint(null);
   }
 
   // Legal destinations for selected piece
   const legalDests = new Set<number | 'bearoff'>();
-  if (selectedPoint !== null) {
-    const from = selectedPoint === -1 ? 'bar' : selectedPoint;
-    legalMoves.filter(m => m.from === from).forEach(m => legalDests.add(m.to));
+  if (sel !== null) {
+    const from = sel === -1 ? 'bar' : sel;
+    legal.filter(m => m.from === from).forEach(m => legalDests.add(m.to));
+  }
+  if (drag) {
+    legal.filter(m => m.from === drag.from).forEach(m => legalDests.add(m.to));
   }
 
-  const svgScale = compact ? 0.65 : 1;
-  const svgW = W * svgScale;
-  const svgH = H * svgScale;
+  const scale = compact ? 0.55 : 1;
 
   return (
-    <div className="relative inline-block select-none">
+    <div className="relative select-none touch-none" style={{ lineHeight: 0 }}>
       <svg
-        width={svgW}
-        height={svgH}
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ display: 'block', maxWidth: '100%' }}
+        ref={svgRef}
+        viewBox={`0 0 ${VW} ${VH}`}
+        width={VW * scale}
+        height={VH * scale}
+        style={{ display: 'block', maxWidth: '100%', height: 'auto', touchAction: 'none' }}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={onPointerUp}
       >
         <defs>
-          <linearGradient id="woodFrame" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#5C2D07" />
-            <stop offset="50%" stopColor="#3D1C08" />
-            <stop offset="100%" stopColor="#5C2D07" />
+          {/* Wooden frame gradient */}
+          <linearGradient id="bgFrame" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%"   stopColor="#7B4A1E" />
+            <stop offset="40%"  stopColor="#5C3210" />
+            <stop offset="100%" stopColor="#3D1C06" />
           </linearGradient>
-          <linearGradient id="woodBoard" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#8B4513" />
-            <stop offset="50%" stopColor="#A0522D" />
-            <stop offset="100%" stopColor="#8B4513" />
+          {/* Green felt */}
+          <linearGradient id="bgFelt" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"  stopColor="#1E5C1E" />
+            <stop offset="50%" stopColor="#194F19" />
+            <stop offset="100%" stopColor="#1E5C1E" />
           </linearGradient>
-          <linearGradient id="woodBar" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#4A2507" />
-            <stop offset="100%" stopColor="#3D1C08" />
+          {/* Bar wood */}
+          <linearGradient id="bgBar" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#4A2507" />
+            <stop offset="50%"  stopColor="#6B3A1F" />
+            <stop offset="100%" stopColor="#4A2507" />
           </linearGradient>
-          <radialGradient id="checkerLight" cx="35%" cy="35%" r="65%">
-            <stop offset="0%" stopColor="#FFFAEE" />
-            <stop offset="60%" stopColor="#F5DEB3" />
-            <stop offset="100%" stopColor="#D4A96A" />
+          {/* Spine */}
+          <linearGradient id="bgSpine" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#3D1C06" />
+            <stop offset="50%"  stopColor="#6B3A1F" />
+            <stop offset="100%" stopColor="#3D1C06" />
+          </linearGradient>
+          {/* Checker light (ivory/marble) */}
+          <radialGradient id="ckLight" cx="35%" cy="30%" r="70%">
+            <stop offset="0%"   stopColor="#FFFDF0" />
+            <stop offset="55%"  stopColor="#EFE0C0" />
+            <stop offset="100%" stopColor="#C8A96A" />
           </radialGradient>
-          <radialGradient id="checkerDark" cx="35%" cy="35%" r="65%">
-            <stop offset="0%" stopColor="#5C4033" />
-            <stop offset="60%" stopColor="#2C1A0E" />
-            <stop offset="100%" stopColor="#1A0A04" />
+          {/* Checker dark (espresso/marble) */}
+          <radialGradient id="ckDark" cx="35%" cy="30%" r="70%">
+            <stop offset="0%"   stopColor="#6B4A30" />
+            <stop offset="55%"  stopColor="#3A1E0A" />
+            <stop offset="100%" stopColor="#1A0804" />
           </radialGradient>
+          {/* Bearoff tray */}
+          <linearGradient id="bgBearoff" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%"   stopColor="#2C1A06" />
+            <stop offset="100%" stopColor="#3D2510" />
+          </linearGradient>
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.5" />
+          </filter>
           <filter id="glow">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+            <feGaussianBlur stdDeviation="4" result="b" />
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
         </defs>
 
-        {/* Outer wooden frame */}
-        <rect x={0} y={0} width={W} height={H} rx={12} ry={12}
-          fill="url(#woodFrame)" stroke="#1A0A04" strokeWidth={3} />
+        {/* ── Outer frame ── */}
+        <rect x={0} y={0} width={VW} height={VH} rx={14} fill="url(#bgFrame)" />
 
-        {/* Inner board surface */}
-        <rect x={INNER_X} y={INNER_Y} width={INNER_W - PAD} height={INNER_H}
-          fill="url(#woodBoard)" />
+        {/* ── Felt surface ── */}
+        <rect x={BX} y={BY} width={BW} height={BH} fill="url(#bgFelt)" />
 
-        {/* Center dividing line */}
-        <line x1={INNER_X} y1={H / 2} x2={INNER_X + INNER_W - PAD} y2={H / 2}
-          stroke="#3D1C08" strokeWidth={2} opacity={0.4} />
-
-        {/* === POINTS (triangles) === */}
-        {points.map((_count, idx) => {
-          const cx = pointX(idx);
-          const top = isTopRow(idx);
-          const tipY = top ? INNER_Y + PT_H : INNER_Y + INNER_H - PT_H;
-          const baseY = top ? INNER_Y : INNER_Y + INNER_H;
-          const halfW = PT_W / 2 - 2;
-
-          // Alternate colors: even index = ivory, odd = red (for visual interest)
-          const isRed = idx % 2 === 0;
-          const fill = isRed ? '#8B1A1A' : '#F5F0DC';
-          const stroke = isRed ? '#6B0E0E' : '#D4C9A8';
-
-          const isHighlighted = highlightPoints.includes(idx);
-          const isLegalDest = legalDests.has(idx);
-          const isSelected = selectedPoint === idx;
+        {/* ── Triangular points ── */}
+        {Array.from({ length: 24 }, (_, i) => {
+          const cx = ptX(i);
+          const top = isTop(i);
+          const baseY = top ? BY : BY + BH;
+          const tipY  = top ? BY + PT_H : BY + BH - PT_H;
+          const hw = PT_W / 2 - 1.5;
+          // Alternate brown / ivory
+          const isBrown = i % 2 === 0;
+          const fill = isBrown ? '#7B3A18' : '#E8D8B0';
+          const isHighlighted = highlightPoints.includes(i);
+          const isDest = legalDests.has(i);
+          const isSel = sel === i;
 
           return (
-            <g key={idx} onClick={() => handlePointClick(idx)}
-              style={{ cursor: isInteractive ? 'pointer' : 'default' }}>
-              {/* Triangle */}
+            <g key={i}
+              onClick={() => {
+                if (!isActive || phase !== 'moving') return;
+                if (drag) return;
+                if (sel !== null) {
+                  const from = sel === -1 ? 'bar' : sel;
+                  const mv = legal.find(m => m.from === from && m.to === i);
+                  if (mv) { store.makeMove(mv); return; }
+                }
+                store.selectPoint(i);
+              }}
+              style={{ cursor: isActive ? 'pointer' : 'default' }}
+            >
               <polygon
-                points={`${cx - halfW},${baseY} ${cx + halfW},${baseY} ${cx},${tipY}`}
-                fill={fill} stroke={stroke} strokeWidth={1}
-                opacity={isHighlighted ? 1 : 0.85}
+                points={`${cx - hw},${baseY} ${cx + hw},${baseY} ${cx},${tipY}`}
+                fill={fill}
+                opacity={0.88}
               />
-              {/* Legal destination highlight */}
-              {isLegalDest && (
+              {/* Destination highlight */}
+              {(isDest || isHighlighted) && (
                 <polygon
-                  points={`${cx - halfW},${baseY} ${cx + halfW},${baseY} ${cx},${tipY}`}
-                  fill="#C8960C" opacity={0.35}
+                  points={`${cx - hw},${baseY} ${cx + hw},${baseY} ${cx},${tipY}`}
+                  fill="#FFD700"
+                  opacity={0.38}
                   style={{ pointerEvents: 'none' }}
+                  filter="url(#glow)"
                 />
               )}
-              {/* Selected source highlight */}
-              {isSelected && (
+              {isSel && (
                 <polygon
-                  points={`${cx - halfW},${baseY} ${cx + halfW},${baseY} ${cx},${tipY}`}
-                  fill="#C8960C" opacity={0.5}
+                  points={`${cx - hw},${baseY} ${cx + hw},${baseY} ${cx},${tipY}`}
+                  fill="#FFD700"
+                  opacity={0.55}
                   style={{ pointerEvents: 'none' }}
                 />
               )}
               {/* Point number */}
               <text
                 x={cx}
-                y={top ? INNER_Y + INNER_H - 5 : INNER_Y + 12}
+                y={top ? BY + BH - 5 : BY + 12}
                 textAnchor="middle"
-                fontSize={10}
-                fill="#F5DEB3"
-                opacity={0.7}
+                fontSize={9}
+                fill="#C8D8B0"
+                opacity={0.6}
                 fontFamily="Georgia, serif"
                 style={{ pointerEvents: 'none' }}
-              >
-                {idx + 1}
-              </text>
+              >{i + 1}</text>
             </g>
           );
         })}
 
-        {/* === CHECKERS === */}
-        {points.map((val, idx) => {
-          if (val === 0) return null;
-          const owner = val > 0 ? 0 : 1;
-          const count = val;
-          const absCount = Math.abs(count);
-          const cx = pointX(idx);
+        {/* ── Spine (horizontal divider) ── */}
+        <rect x={BX} y={MID_Y - SPINE / 2} width={BW} height={SPINE}
+          fill="url(#bgSpine)" />
+        {/* Spine decorative hinges */}
+        {[BX + BW * 0.28, BX + BW * 0.72].map((hx, hi) => (
+          <g key={hi}>
+            <rect x={hx - 10} y={MID_Y - 8} width={20} height={16} rx={3}
+              fill="#C8960C" opacity={0.85} />
+            <circle cx={hx} cy={MID_Y} r={4} fill="#8B6914" />
+          </g>
+        ))}
 
-          return Array.from({ length: absCount }, (_, stackPos) => {
-            const cy = checkerY(idx, stackPos, absCount);
-            const isSelected = selectedPoint === idx;
-            const r = 19;
+        {/* ── Bar ── */}
+        <rect x={BAR_X} y={BY} width={BAR_W} height={BH}
+          fill="url(#bgBar)"
+          style={{ cursor: isActive && bar[player] > 0 ? 'pointer' : 'default' }}
+          onClick={() => {
+            if (!isActive || phase !== 'moving') return;
+            store.selectPoint(-1);
+          }}
+        />
+
+        {/* ── Checkers on points ── */}
+        {points.map((cnt, i) => {
+          if (cnt === 0) return null;
+          const owner = cnt > 0 ? 0 : 1;
+          const abs = Math.abs(cnt);
+          const cx = ptX(i);
+          const isDraggingFrom = drag?.from === i;
+
+          return Array.from({ length: abs }, (_, s) => {
+            const cy = checkerY(i, s, abs);
+            const isTopChecker = s === abs - 1;
+            const isSrcSelected = sel === i && isTopChecker;
+            const isBeingDragged = isDraggingFrom && isTopChecker;
+
             return (
-              <g key={`${idx}-${stackPos}`}
-                onClick={() => handlePointClick(idx)}
-                style={{ cursor: isInteractive ? 'pointer' : 'default' }}>
-                <circle cx={cx} cy={cy} r={r}
-                  fill={owner === 0 ? 'url(#checkerLight)' : 'url(#checkerDark)'}
-                  stroke={owner === 0 ? '#8B6914' : '#5C4033'}
-                  strokeWidth={isSelected && stackPos === absCount - 1 ? 2.5 : 1.5}
-                  filter={isSelected && stackPos === absCount - 1 ? 'url(#glow)' : undefined}
+              <g key={`${i}-${s}`}
+                onPointerDown={isTopChecker ? (e) => onPointerDown(e, i) : undefined}
+                onClick={() => {
+                  if (!isActive || phase !== 'moving' || drag) return;
+                  if (sel !== null && sel !== i) {
+                    const from = sel === -1 ? 'bar' : sel;
+                    const mv = legal.find(m => m.from === from && m.to === i);
+                    if (mv) { store.makeMove(mv); return; }
+                  }
+                  store.selectPoint(i);
+                }}
+                style={{ cursor: isActive ? (isTopChecker ? 'grab' : 'default') : 'default', touchAction: 'none' }}
+                opacity={isBeingDragged ? 0.35 : 1}
+              >
+                <circle cx={cx} cy={cy} r={CR}
+                  fill={owner === 0 ? 'url(#ckLight)' : 'url(#ckDark)'}
+                  stroke={owner === 0 ? '#9B7830' : '#6B4030'}
+                  strokeWidth={isSrcSelected ? 2.5 : 1.5}
+                  filter={isSrcSelected ? 'url(#glow)' : 'url(#shadow)'}
                 />
-                {/* Checker ring detail */}
-                <circle cx={cx} cy={cy} r={r - 5}
+                {/* Inner ring detail */}
+                <circle cx={cx} cy={cy} r={CR - 5}
                   fill="none"
-                  stroke={owner === 0 ? '#C8960C' : '#8B4513'}
-                  strokeWidth={0.8}
-                  opacity={0.5}
+                  stroke={owner === 0 ? '#C8A060' : '#8B5030'}
+                  strokeWidth={1}
+                  opacity={0.55}
                   style={{ pointerEvents: 'none' }}
                 />
-                {absCount > 5 && stackPos === absCount - 1 && (
-                  <text x={cx} y={cy + 4} textAnchor="middle"
-                    fontSize={11} fontWeight="bold"
-                    fill={owner === 0 ? '#5C2D07' : '#F5DEB3'}
-                    style={{ pointerEvents: 'none' }}
-                  >
-                    {absCount}
+                {abs > 5 && isTopChecker && (
+                  <text x={cx} y={cy + 5} textAnchor="middle"
+                    fontSize={12} fontWeight="bold"
+                    fill={owner === 0 ? '#5C3010' : '#F5DEB3'}
+                    style={{ pointerEvents: 'none' }}>
+                    {abs}
                   </text>
                 )}
               </g>
@@ -311,126 +398,149 @@ export default function BackgammonBoard({
           });
         })}
 
-        {/* === BAR === */}
-        <rect x={BAR_X} y={INNER_Y} width={BAR_W} height={INNER_H}
-          fill="url(#woodBar)" onClick={handleBarClick}
-          style={{ cursor: isInteractive && bar[currentPlayer] > 0 ? 'pointer' : 'default' }}
-        />
-        <text x={BAR_X + BAR_W / 2} y={H / 2 - 2} textAnchor="middle"
-          fontSize={9} fill="#F5DEB3" opacity={0.5} fontFamily="Georgia, serif">
-          BAR
-        </text>
+        {/* ── Bar checkers ── */}
+        {/* Player 0 top half of bar */}
+        {Array.from({ length: bar[0] }, (_, i) => {
+          const cy = MID_Y - SPINE / 2 - CR - 4 - i * (CR * 2 + 2);
+          const isSel = sel === -1;
+          return (
+            <g key={`b0-${i}`}
+              onPointerDown={i === bar[0] - 1 ? (e) => onPointerDown(e, 'bar') : undefined}
+              onClick={() => { if (isActive && phase === 'moving') store.selectPoint(-1); }}
+              style={{ cursor: isActive ? 'grab' : 'default', touchAction: 'none' }}>
+              <circle cx={BAR_X + BAR_W / 2} cy={cy} r={CR}
+                fill="url(#ckLight)" stroke="#9B7830"
+                strokeWidth={isSel ? 2.5 : 1.5}
+                filter={isSel ? 'url(#glow)' : 'url(#shadow)'} />
+              <circle cx={BAR_X + BAR_W / 2} cy={cy} r={CR - 5}
+                fill="none" stroke="#C8A060" strokeWidth={1} opacity={0.55}
+                style={{ pointerEvents: 'none' }} />
+            </g>
+          );
+        })}
+        {/* Player 1 bottom half of bar */}
+        {Array.from({ length: bar[1] }, (_, i) => {
+          const cy = MID_Y + SPINE / 2 + CR + 4 + i * (CR * 2 + 2);
+          return (
+            <g key={`b1-${i}`} style={{ cursor: 'default' }}>
+              <circle cx={BAR_X + BAR_W / 2} cy={cy} r={CR}
+                fill="url(#ckDark)" stroke="#6B4030" strokeWidth={1.5}
+                filter="url(#shadow)" />
+              <circle cx={BAR_X + BAR_W / 2} cy={cy} r={CR - 5}
+                fill="none" stroke="#8B5030" strokeWidth={1} opacity={0.55}
+                style={{ pointerEvents: 'none' }} />
+            </g>
+          );
+        })}
 
-        {/* Bar checkers - player 0 (top half of bar) */}
-        {Array.from({ length: bar[0] }, (_, i) => (
-          <g key={`bar0-${i}`} onClick={handleBarClick}
-            style={{ cursor: isInteractive ? 'pointer' : 'default' }}>
-            <circle cx={BAR_X + BAR_W / 2} cy={INNER_Y + INNER_H * 0.25 - i * 28}
-              r={19} fill="url(#checkerLight)" stroke="#8B6914" strokeWidth={1.5}
-              filter={selectedPoint === -1 ? 'url(#glow)' : undefined}
-            />
-            <circle cx={BAR_X + BAR_W / 2} cy={INNER_Y + INNER_H * 0.25 - i * 28}
-              r={14} fill="none" stroke="#C8960C" strokeWidth={0.8} opacity={0.5}
-              style={{ pointerEvents: 'none' }} />
-          </g>
-        ))}
+        {/* BAR label */}
+        <text x={BAR_X + BAR_W / 2} y={MID_Y + 5} textAnchor="middle"
+          fontSize={8} fill="#C8960C" opacity={0.7} fontFamily="Georgia, serif"
+          style={{ pointerEvents: 'none' }}>BAR</text>
 
-        {/* Bar checkers - player 1 (bottom half of bar) */}
-        {Array.from({ length: bar[1] }, (_, i) => (
-          <g key={`bar1-${i}`} onClick={handleBarClick}
-            style={{ cursor: isInteractive ? 'pointer' : 'default' }}>
-            <circle cx={BAR_X + BAR_W / 2} cy={INNER_Y + INNER_H * 0.75 + i * 28}
-              r={19} fill="url(#checkerDark)" stroke="#5C4033" strokeWidth={1.5} />
-            <circle cx={BAR_X + BAR_W / 2} cy={INNER_Y + INNER_H * 0.75 + i * 28}
-              r={14} fill="none" stroke="#8B4513" strokeWidth={0.8} opacity={0.5}
-              style={{ pointerEvents: 'none' }} />
-          </g>
-        ))}
+        {/* ── Bearoff tray ── */}
+        <rect x={BEAROFF_X - 2} y={BY} width={BEAROFF_W} height={BH}
+          fill="url(#bgBearoff)" rx={4} />
+        <text x={BEAROFF_X + BEAROFF_W / 2 - 2} y={BY + BH / 2}
+          textAnchor="middle" fontSize={8} fill="#C8960C" opacity={0.55}
+          fontFamily="Georgia, serif" style={{ pointerEvents: 'none' }}>OFF</text>
 
-        {/* === BEAROFF TRAY === */}
-        <rect x={BEAROFF_X - 4} y={INNER_Y} width={BEAROFF_W} height={INNER_H}
-          fill="#3D1C08" stroke="#1A0A04" strokeWidth={1} rx={4} />
-        <text x={BEAROFF_X + BEAROFF_W / 2 - 4} y={H / 2 - 2} textAnchor="middle"
-          fontSize={8} fill="#F5DEB3" opacity={0.5} fontFamily="Georgia, serif">
-          OFF
-        </text>
-
-        {/* Bearoff - player 0 stacked at top */}
-        {Array.from({ length: Math.min(store.bearOff[0], 8) }, (_, i) => (
-          <circle key={`bo0-${i}`}
-            cx={BEAROFF_X + BEAROFF_W / 2 - 4}
-            cy={INNER_Y + 18 + i * 22}
-            r={16} fill="url(#checkerLight)" stroke="#8B6914" strokeWidth={1} />
-        ))}
+        {/* Bearoff checkers player 0 (top) */}
         {store.bearOff[0] > 0 && (
-          <text x={BEAROFF_X + BEAROFF_W / 2 - 4} y={INNER_Y + INNER_H / 4}
-            textAnchor="middle" fontSize={12} fontWeight="bold"
-            fill="#F5DEB3" fontFamily="Georgia, serif"
-          >
-            {store.bearOff[0]}
-          </text>
+          <>
+            {Array.from({ length: Math.min(store.bearOff[0], 6) }, (_, i) => (
+              <circle key={i} cx={BEAROFF_X + BEAROFF_W / 2 - 2} cy={BY + 18 + i * 20}
+                r={14} fill="url(#ckLight)" stroke="#9B7830" strokeWidth={1} />
+            ))}
+            <text x={BEAROFF_X + BEAROFF_W / 2 - 2} y={BY + BH / 4}
+              textAnchor="middle" fontSize={13} fontWeight="bold"
+              fill="#F5DEB3" fontFamily="Georgia, serif"
+              style={{ pointerEvents: 'none' }}>×{store.bearOff[0]}</text>
+          </>
         )}
 
-        {/* Bearoff - player 1 stacked at bottom */}
-        {Array.from({ length: Math.min(store.bearOff[1], 8) }, (_, i) => (
-          <circle key={`bo1-${i}`}
-            cx={BEAROFF_X + BEAROFF_W / 2 - 4}
-            cy={INNER_Y + INNER_H - 18 - i * 22}
-            r={16} fill="url(#checkerDark)" stroke="#5C4033" strokeWidth={1} />
-        ))}
+        {/* Bearoff checkers player 1 (bottom) */}
         {store.bearOff[1] > 0 && (
-          <text x={BEAROFF_X + BEAROFF_W / 2 - 4} y={INNER_Y + INNER_H * 3 / 4}
-            textAnchor="middle" fontSize={12} fontWeight="bold"
-            fill="#F5DEB3" fontFamily="Georgia, serif"
-          >
-            {store.bearOff[1]}
-          </text>
+          <>
+            {Array.from({ length: Math.min(store.bearOff[1], 6) }, (_, i) => (
+              <circle key={i} cx={BEAROFF_X + BEAROFF_W / 2 - 2} cy={BY + BH - 18 - i * 20}
+                r={14} fill="url(#ckDark)" stroke="#6B4030" strokeWidth={1} />
+            ))}
+            <text x={BEAROFF_X + BEAROFF_W / 2 - 2} y={BY + BH * 3 / 4}
+              textAnchor="middle" fontSize={13} fontWeight="bold"
+              fill="#F5DEB3" fontFamily="Georgia, serif"
+              style={{ pointerEvents: 'none' }}>×{store.bearOff[1]}</text>
+          </>
         )}
 
-        {/* === DICE === */}
-        {dice && (
-          <g>
-            {[dice[0], dice[1]].map((val, i) => {
-              const isUsed = !movesLeft.includes(val) && !(dice[0] === dice[1] && movesLeft.length > i);
-              return (
-                <DiceSVG
-                  key={i}
-                  value={val}
-                  used={isUsed}
-                  x={BAR_X + BAR_W / 2 - 38 + i * 42}
-                  y={H / 2 - 18}
-                  dark={currentPlayer === 1}
-                />
-              );
-            })}
-          </g>
-        )}
+        {/* ── Dice ── */}
+        {dice && (() => {
+          const diceVals = dice[0] === dice[1]
+            ? [dice[0], dice[0], dice[0], dice[0]]
+            : [dice[0], dice[1]];
+          const usedCount = diceVals.length - movesLeft.length;
+          const dS = 38; const gap = 6;
+          const totalW = diceVals.length * (dS + gap) - gap;
+          const startX = BAR_X + BAR_W / 2 - totalW / 2;
 
-        {/* === ROLL BUTTON (when no dice) === */}
-        {phase === 'rolling' && isInteractive && (
+          return diceVals.map((v, i) => {
+            const used = i < usedCount;
+            const dx = startX + i * (dS + gap);
+            const dy = MID_Y - dS / 2;
+            return (
+              <g key={i} opacity={used ? 0.3 : 1}>
+                <rect x={dx} y={dy} width={dS} height={dS} rx={6}
+                  fill={player === 0 ? '#F5E8C8' : '#2C1A0E'}
+                  stroke={player === 0 ? '#9B7830' : '#8B5030'}
+                  strokeWidth={1.5} />
+                <DiePips val={v} x={dx} y={dy} s={dS} />
+              </g>
+            );
+          });
+        })()}
+
+        {/* ── Roll button ── */}
+        {phase === 'rolling' && isActive && (
           <g onClick={() => store.rollDice()} style={{ cursor: 'pointer' }}>
-            <rect x={BAR_X + 4} y={H / 2 - 22} width={BAR_W - 8} height={44}
-              rx={8} fill="#C8960C" stroke="#8B6914" strokeWidth={1.5} />
-            <text x={BAR_X + BAR_W / 2} y={H / 2 + 6}
-              textAnchor="middle" fontSize={11} fontWeight="bold"
-              fill="#3D1C08" fontFamily="Georgia, serif">
-              ROLL
-            </text>
+            <rect x={BAR_X + 4} y={MID_Y - 24} width={BAR_W - 8} height={48}
+              rx={8} fill="#C8960C" stroke="#8B6914" strokeWidth={1.5}
+              filter="url(#shadow)" />
+            <text x={BAR_X + BAR_W / 2} y={MID_Y - 6}
+              textAnchor="middle" fontSize={9} fill="#3D1C06"
+              fontFamily="Georgia, serif" fontWeight="bold">ROLL</text>
+            <text x={BAR_X + BAR_W / 2} y={MID_Y + 10}
+              textAnchor="middle" fontSize={14} fill="#3D1C06">🎲</text>
           </g>
         )}
 
-        {/* === GAME OVER === */}
+        {/* ── Dragging ghost checker ── */}
+        {drag && (
+          <g style={{ pointerEvents: 'none' }}>
+            <circle cx={drag.svgX} cy={drag.svgY} r={CR + 2}
+              fill={drag.owner === 0 ? 'url(#ckLight)' : 'url(#ckDark)'}
+              stroke={drag.owner === 0 ? '#C8960C' : '#C8960C'}
+              strokeWidth={2.5}
+              opacity={0.9}
+              filter="url(#glow)"
+            />
+            <circle cx={drag.svgX} cy={drag.svgY} r={CR - 4}
+              fill="none" stroke="#FFD700" strokeWidth={1} opacity={0.6} />
+          </g>
+        )}
+
+        {/* ── Game over overlay ── */}
         {phase === 'gameover' && (
           <g>
-            <rect x={W / 2 - 120} y={H / 2 - 36} width={240} height={72}
-              rx={12} fill="#3D1C08" stroke="#C8960C" strokeWidth={2} opacity={0.95} />
-            <text x={W / 2} y={H / 2 - 8} textAnchor="middle"
-              fontSize={18} fontWeight="bold" fill="#C8960C" fontFamily="Georgia, serif">
-              {store.winner === 0 ? 'Cream Wins!' : 'Dark Wins!'}
+            <rect x={0} y={0} width={VW} height={VH} fill="#000" opacity={0.5} rx={14} />
+            <rect x={VW / 2 - 140} y={VH / 2 - 52} width={280} height={104}
+              rx={16} fill="#3D1C06" stroke="#C8960C" strokeWidth={2.5} />
+            <text x={VW / 2} y={VH / 2 - 14} textAnchor="middle"
+              fontSize={22} fontWeight="bold" fill="#C8960C" fontFamily="Georgia, serif">
+              {store.winner === 0 ? '🏆 Cream Wins!' : '🏆 Dark Wins!'}
             </text>
-            <text x={W / 2} y={H / 2 + 16} textAnchor="middle"
-              fontSize={11} fill="#F5DEB3" fontFamily="Georgia, serif">
-              Click New Game to play again
+            <text x={VW / 2} y={VH / 2 + 18} textAnchor="middle"
+              fontSize={12} fill="#F5DEB3" fontFamily="Georgia, serif">
+              Tap New Game to play again
             </text>
           </g>
         )}
